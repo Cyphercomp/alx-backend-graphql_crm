@@ -1,61 +1,38 @@
-#!/usr/bin/env python3
+from gql import gql, Client
+from gql.transport.requests import RequestsHTTPTransport
+from datetime import datetime, timedelta
 
-import requests
-import datetime
-import json
+# Define transport
+transport = RequestsHTTPTransport(
+    url="http://localhost:8000/graphql",
+    verify=False,
+    retries=3,
+)
 
-GRAPHQL_ENDPOINT = "http://localhost:8000/graphql"
-LOG_FILE = "/tmp/order_reminders_log.txt"
+client = Client(transport=transport, fetch_schema_from_transport=True)
 
-# Define the date range for the last 7 days
-today = datetime.date.today()
-seven_days_ago = today - datetime.timedelta(days=7)
+# Create the query
+one_week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+query = gql(f"""
+{{
+  orders(orderDate_Gte: "{one_week_ago}") {{
+    id
+    customer {{
+      email
+    }}
+  }}
+}}
+""")
 
-# Convert dates to ISO 8601 strings
-date_from = seven_days_ago.isoformat()
-
-# GraphQL query string
-query = """
-query GetRecentOrders($from: Date!) {
-  allOrders(orderDateGte: $from) {
-    edges {
-      node {
-        id
-        orderDate
-        customer {
-          email
-        }
-      }
-    }
-  }
-}
-"""
-
-# Variables for the query
-variables = {
-    "from": date_from
-}
-
+# Execute and log results
 try:
-    response = requests.post(
-        GRAPHQL_ENDPOINT,
-        json={"query": query, "variables": variables},
-        headers={"Content-Type": "application/json"}
-    )
+    result = client.execute(query)
+    orders = result.get("orders", [])
 
-    data = response.json()
-    orders = data["data"]["allOrders"]["edges"]
-
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with open(LOG_FILE, "a") as log:
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with open("/tmp/order_reminders_log.txt", "a") as log:
         for order in orders:
-            order_id = order["node"]["id"]
-            email = order["node"]["customer"]["email"]
-            log.write(f"[{timestamp}] Reminder for Order ID: {order_id}, Email: {email}\n")
-
+            log.write(f"{now} - Order ID: {order['id']}, Email: {order['customer']['email']}\n")
     print("Order reminders processed!")
-
 except Exception as e:
-    with open(LOG_FILE, "a") as log:
-        log.write(f"[{timestamp}] ERROR: {e}\n")
-    print("Failed to process order reminders.")
+    print("Error:", e)
